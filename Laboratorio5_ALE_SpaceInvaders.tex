@@ -1,0 +1,92 @@
+\documentclass[10pt]{article}
+\usepackage[vmargin=2.25cm, hmargin=2.75cm]{geometry}
+\usepackage[utf8]{inputenc}
+\usepackage[spanish]{babel}
+\usepackage{amsmath}
+\usepackage{amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{multicol}
+\usepackage{caption}
+\usepackage{subcaption}
+
+\setlist{noitemsep, topsep=1pt, partopsep=0pt, leftmargin=1.1em}
+\captionsetup{font=small, skip=2pt}
+\titlespacing*{\section}{0pt}{6pt}{3pt}
+\titlespacing*{\subsection}{0pt}{4pt}{2pt}
+\titleformat{\section}{\normalfont\large\bfseries}{\thesection}{0.6em}{}
+\titleformat{\subsection}{\normalfont\bfseries}{\thesubsection}{0.6em}{}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{2pt}
+
+\newcommand{\rhead}[1]{\textbf{#1}}
+
+\pagestyle{empty}
+
+\begin{document}
+\shorthandoff{"}
+
+\begin{center}
+{\large\bfseries CC3092 -- Deep Learning y Sistemas Inteligentes}\\[2pt]
+{\large Laboratorio \#5: Agentes en el Arcade Learning Environment (ALE): Space Invaders}\\[2pt]
+\small Angel Esteban Esquit Hernández\\[2pt]
+\small Repositorio: \url{https://github.com/AngelEsquit/Lab5-DL}
+\end{center}
+\vspace{-4pt}
+
+\section{El Arcade Learning Environment (ALE)}
+
+\rhead{Qué es ALE y relación con Stella y Atari 2600.} ALE (Bellemare et al., 2013) es un framework que expone más de 50 juegos originales de \textbf{Atari 2600} como entornos estandarizados de RL, resolviendo la falta de un banco común y desafiante de tareas para comparar agentes. Se construye sobre \textbf{Stella}, un emulador de código abierto que reproduce el hardware original (CPU 6507, chip de video TIA, 128 bytes de RAM); ALE instrumenta ese emulador inyectando la acción del agente como entrada de joystick y exponiendo pantalla/RAM como observación y la variación del puntaje interno como recompensa. Los juegos son los \textbf{ROMs originales} sin modificar.
+
+\rhead{Variantes en Gymnasium.} \texttt{ALE/SpaceInvaders-v5} retorna el frame RGB como observación; con \texttt{obs\_type="ram"} retorna los 128 bytes de RAM de la consola en su lugar. \texttt{frameskip} controla cuántos frames de emulación se repiten por cada \texttt{step()} del agente. \texttt{repeat\_action\_probability} (\emph{sticky actions}, Machado et al., 2018) es la probabilidad de que el emulador ignore la acción elegida y repita la anterior, introduciendo estocasticidad para evitar que los agentes memoricen secuencias fijas explotando el determinismo de Atari. \texttt{full\_action\_space} expone las 18 acciones del joystick completo en vez de solo las que el juego usa.
+
+\rhead{Frame skipping.} El emulador corre a 60 fps; permitir que el agente decida en cada frame sería costoso y poco informativo (frames consecutivos casi no cambian). Con frame skipping el agente elige una acción cada $k\in\{2,3,4\}$ frames, que se repite internamente sumando la recompensa acumulada. Esto acelera la simulación y reduce el horizonte efectivo de decisiones del episodio, facilitando el aprendizaje.
+
+\rhead{Space Invaders.} El jugador mueve un cañón láser horizontalmente y dispara para destruir oleadas descendentes de invasores, evitando sus disparos y protegiéndose tras búnkeres destructibles, hasta perder sus 3 vidas o ser alcanzado por los invasores. ALE traduce el puntaje del juego directamente a \texttt{reward}: en cada \texttt{step()}, la recompensa es la diferencia de puntaje interno respecto al frame anterior; \texttt{terminated=True} cuando se pierden todas las vidas.
+
+\section{Espacios de observación y acción en entornos Atari}
+
+\rhead{Observación por defecto vs. CartPole-v1.} \texttt{ALE/SpaceInvaders-v5} retorna un frame RGB de 210$\times$160$\times$3 (\texttt{Box(0,255,\dots,uint8)}), mientras que \texttt{CartPole-v1} retorna un vector continuo de 4 valores (posición/velocidad del carro, ángulo/velocidad angular del poste). Trabajar con imágenes implica un espacio de estados de dimensionalidad mucho mayor (100{,}800 valores vs. 4): no es viable una política tabular ni una red totalmente conectada simple, se requieren aproximadores con capacidad de extraer estructura espacial (CNNs); además el agente debe aprender por sí mismo qué características visuales importan, en vez de recibirlas ya resumidas.
+
+\rhead{Observación en RAM.} \texttt{obs\_type="ram"} expone los 128 bytes de memoria de la consola como observación (\texttt{Box(0,255,(128,),uint8)}). Es preferible cuando se busca reducir drásticamente el costo computacional (permite redes pequeñas en vez de CNNs), acelerar la experimentación en hardware limitado, o cuando el interés es interpretabilidad/ingeniería de características sobre variables de estado explícitas en vez de aprendizaje de representaciones visuales.
+
+\rhead{Espacio de acción.} \texttt{Discrete(6)}: \texttt{NOOP} (no hacer nada), \texttt{FIRE} (disparar sin moverse), \texttt{RIGHT}/\texttt{LEFT} (mover sin disparar), \texttt{RIGHTFIRE}/\texttt{LEFTFIRE} (mover y disparar simultáneamente).
+
+\rhead{\texttt{AtariPreprocessing} y \texttt{FrameStackObservation}.} \texttt{AtariPreprocessing} aplica el preprocesamiento estándar desde DQN (Mnih et al., 2015): escala de grises, redimensionamiento a 84$\times$84, frame skipping (con \texttt{max} sobre los últimos frames para evitar parpadeo de sprites) y recorte opcional de recompensa a $\{-1,0,1\}$. \texttt{FrameStackObservation} apila las últimas $k$ observaciones (t\'{i}picamente 4) porque un solo frame no contiene información de movimiento; apilar frames permite inferir dirección/velocidad de naves y disparos sin arquitecturas recurrentes.
+
+\section{Módulo de funciones desarrollado (\texttt{ale\_utils.py})}
+
+Se implementó un módulo reutilizable con cinco funciones. \texttt{crear\_entorno(nombre\_entorno, video\_folder=None, episode\_trigger=None, **kwargs)} crea el entorno con \texttt{gym.make} y, si se da \texttt{video\_folder}, lo envuelve con \texttt{gymnasium.wrappers.RecordVideo} (forzando \texttt{render\_mode="rgb\_array"}); funciona igual para \texttt{ALE/SpaceInvaders-v5} que para cualquier otro entorno (verificado con \texttt{CartPole-v1}). \texttt{agente\_aleatorio(observation, env)} retorna \texttt{env.action\_space.sample()} como \emph{baseline} sin entrenamiento. \texttt{agente\_regla\_simple(observation, env)} dispara continuamente (\texttt{RIGHTFIRE}/\texttt{LEFTFIRE}/\texttt{FIRE}) usando \texttt{get\_action\_meanings()} para localizar esas acciones. \texttt{ejecutar\_episodio(env, funcion\_agente, max\_steps=10000, seed=None)} corre un episodio completo hasta \texttt{terminated}, \texttt{truncated} o \texttt{max\_steps}, retornando pasos y recompensa total. \texttt{generar\_video\_agente(nombre\_entorno, funcion\_agente, video\_folder, name\_prefix, n\_episodios=1, ...)} combina las anteriores: crea el entorno con grabación, ejecuta $n$ episodios, cierra el entorno con \texttt{env.close()} (indispensable para que \texttt{RecordVideo} escriba el \texttt{.mp4}) y retorna rutas de video y métricas por episodio.
+
+\section{Resultados}
+
+Se generaron videos de 1 episodio completo para tres configuraciones, usando \texttt{ale-py} 0.12.1 y \texttt{gymnasium} 1.3.0:
+
+\begin{center}
+\begin{tabular}{llcc}
+\toprule
+Entorno & Agente & Pasos & Recompensa total \\
+\midrule
+ALE/SpaceInvaders-v5 & Aleatorio & 660 & 210.0 \\
+ALE/SpaceInvaders-v5 & Regla simple (disparo continuo) & 538 & 270.0 \\
+CartPole-v1 & Aleatorio & 31 & 31.0 \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+Los tres videos \texttt{.mp4} quedan en la carpeta \texttt{videos/} del repositorio.
+
+\section{Discusión}
+
+El agente aleatorio logra recompensa no trivial en Space Invaders simplemente porque, de sus 6 acciones posibles, la mitad incluye disparo, por lo que dispara con relativa frecuencia y ocasionalmente acierta sin ninguna estrategia. El agente de regla simple, al disparar en \emph{todos} los pasos en vez de repartir su presupuesto de acciones entre moverse y disparar, obtuvo mayor recompensa (270 vs. 210) en un episodio más corto (538 vs. 660 pasos, es decir, murió antes pero fue más eficiente eliminando invasores por paso). Esto confirma que una pequeña regla de dominio ("siempre disparar") supera a la acción puramente aleatoria sin necesidad de aprendizaje.
+
+La infraestructura desarrollada (\texttt{crear\_entorno}, \texttt{ejecutar\_episodio}, \texttt{generar\_video\_agente}) es agnóstica a la política usada: basta reemplazar \texttt{funcion\_agente} por un agente entrenado (p. ej. un DQN sobre observaciones preprocesadas con \texttt{AtariPreprocessing} + \texttt{FrameStackObservation}) para reutilizar el mismo código en el proyecto de entrenamiento de agentes.
+
+{\small
+\rhead{Referencias.} Bellemare, M. G., Naddaf, Y., Veness, J., \& Bowling, M. (2013). The Arcade Learning Environment. \emph{JAIR}, 47, 253--279. --- Machado, M. C. et al. (2018). Revisiting the Arcade Learning Environment. \emph{JAIR}, 61, 523--562. --- Mnih, V. et al. (2015). Human-level control through deep reinforcement learning. \emph{Nature}, 518(7540), 529--533. --- Gymnasium Documentation, Farama Foundation, \url{https://gymnasium.farama.org/}. --- ALE-py Documentation, Farama Foundation, \url{https://ale.farama.org/}.
+}
+
+\end{document}
